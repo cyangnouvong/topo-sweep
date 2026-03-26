@@ -1,38 +1,67 @@
 import './style.css';
 import * as THREE from 'three';
-import { Box } from './components/Box';
+import { HeightMap, sweepUniforms } from './components/HeightMap';
 
 // SETUP
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xfdfbd4);
+scene.background = new THREE.Color(0xe4e4df);
 
 const aspect = window.innerWidth / window.innerHeight;
-const frustum = 10;
+const frustum = 100;
 
 const camera = new THREE.OrthographicCamera(
-  (frustum * aspect) / -2, // left boundary
-  (frustum * aspect) / 2, // right boundary
-  frustum / 2, // top boundary
-  frustum / -2, // bottom boundary
-  0.1, // near clip
-  1000 // far clip
+  (frustum * aspect) / -2,
+  (frustum * aspect) / 2,
+  frustum / 2,
+  frustum / -2,
+  0.1,
+  1000
 );
-camera.position.z = 5;
+camera.position.z = 10;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 // OBJECTS
-const box = new Box(scene, 0x545333, { x: 0, y: 0, z: 0 });
-const box2 = new Box(scene, 0x878672, { x: 2, y: 0, z: 5 });
+const map = new HeightMap();
+const mapObj = map.getMesh();
+scene.add(mapObj);
+
+// SWEEP CONFIG — bottom-left → top-right
+//
+// The vertex shader projects onto: vDiag = (worldPos.x + worldPos.y) * 0.7071
+//
+// In Three.js orthographic world space (Y increases upward):
+//   Bottom-left corner:  x = −halfX,  y = −halfY  → diag = (−halfX − halfY) * 0.7071  (most negative)
+//   Top-right corner:    x = +halfX,  y = +halfY  → diag = ( halfX + halfY) * 0.7071  (most positive)
+//
+const halfX = (frustum * aspect) / 2;
+const halfY = frustum / 2;
+const diagMin = -(halfX + halfY) * 0.7071067; // bottom-left
+const diagMax = (halfX + halfY) * 0.7071067; // top-right
+
+const sweepSpeed = 40; // world units per second along diagonal
+const stripeHalf = 90;
+sweepUniforms.uStripeHalf.value = stripeHalf;
+sweepUniforms.uSweepX.value = diagMin - stripeHalf; // start just off bottom-left
+
+const clock = new THREE.Clock();
 
 // ANIMATION
 function animate(): void {
-  requestAnimationFrame(animate); // Schedule the next frame - infinite loop
-  box.update(); // Update the box's state
-  box2.update(); // Update the second box's state
-  // Render the scene from the perspective of the camera
+  requestAnimationFrame(animate);
+
+  const delta = clock.getDelta();
+
+  sweepUniforms.uSweepX.value += sweepSpeed * delta;
+
+  // Once the stripe has fully passed the top-right corner, regenerate and reset
+  if (sweepUniforms.uSweepX.value > diagMax + stripeHalf) {
+    map.regenerate();
+    sweepUniforms.uSweepX.value = diagMin - stripeHalf;
+  }
+
   renderer.render(scene, camera);
 }
 animate();
